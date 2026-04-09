@@ -1,20 +1,15 @@
 use crate::consistent_hash::NodeId;
 
 /// Replication mode for WAL entries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReplicationMode {
     /// Single-node, no replication.
     None,
     /// Leader streams to followers, doesn't wait for ACK before ACKing publisher.
+    #[default]
     Async,
     /// Leader waits for majority replica ACK before ACKing publisher.
     Sync,
-}
-
-impl Default for ReplicationMode {
-    fn default() -> Self {
-        Self::Async
-    }
 }
 
 /// Replication configuration.
