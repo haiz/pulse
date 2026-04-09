@@ -1,0 +1,55 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+*.tgz
+
+# Go
+sdks/go/go.sum
+
+# Temporary
+*.tmp
+*.log
+
+# Claude/Serena (local tools)
+.claude/
+.serena/
+
+# Secrets (never commit)
+*.pem
+*.key
+.env
+.env.*
+
+# Old architecture (migrated to crates/)
+crates-old-architecture/

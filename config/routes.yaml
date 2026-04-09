@@ -1,0 +1,33 @@
+# Pulse Route Configuration
+# Defines server-side routing rules, content filters, transforms, and failure policies.
+# Hot-reloadable: changes take effect without restart.
+
+routes:
+  # Route large orders to fraud detection
+  - name: "large-orders-fraud-check"
+    match:
+      topic: "order.created"
+      where: "payload.amount > 1000"
+    deliver:
+      - service: "fraud-detection"
+    enabled: true
+
+  # Fan-out all events to analytics
+  - name: "all-events-to-analytics"
+    match:
+      topic: ">"
+    deliver:
+      - service: "analytics-service"
+
+# Failure handling
+failure_policy:
+  default:
+    max_retries: 5
+    backoff:
+      type: "exponential"
+      initial_secs: 1
+      max_secs: 60
+      multiplier: 2.0
+    dead_letter:
+      topic_prefix: "dlq"
+      retention_hours: 168  # 7 days

@@ -1,0 +1,33 @@
+# Pulse Services Configuration
+# Defines namespaces, services, API keys, and permissions.
+# Hot-reloadable: changes take effect without restart.
+# Supports ${ENV_VAR} and ${ENV_VAR:-default} substitution.
+
+namespaces:
+  ecommerce:
+    services:
+      order-service:
+        key: "${ORDER_SVC_API_KEY:-psk_dev_order123}"
+        permissions:
+          publish: ["order.*"]
+          subscribe: ["payment.*", "inventory.*"]
+
+      payment-service:
+        key: "${PAYMENT_SVC_API_KEY:-psk_dev_payment456}"
+        permissions:
+          publish: ["payment.*"]
+          subscribe: ["order.created"]
+
+      analytics-service:
+        key: "${ANALYTICS_SVC_API_KEY:-psk_dev_analytics789}"
+        permissions:
+          publish: []
+          subscribe: ["*"]  # can subscribe to everything
+
+  internal-tools:
+    services:
+      deploy-service:
+        key: "${DEPLOY_SVC_API_KEY:-psk_dev_deploy000}"
+        permissions:
+          publish: ["deploy.*"]
+          subscribe: ["deploy.*"]

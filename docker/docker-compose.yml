@@ -1,0 +1,48 @@
+version: "3.8"
+services:
+  node-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: node-1
+    ports:
+      - "4222:4222"
+      - "9090:9090"
+    volumes:
+      - node1-data:/var/lib/pulse
+    command:
+      - --listen=0.0.0.0:4222
+      - --durability=balanced
+
+  node-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: node-2
+    ports:
+      - "4223:4222"
+      - "9091:9090"
+    volumes:
+      - node2-data:/var/lib/pulse
+    command:
+      - --listen=0.0.0.0:4222
+      - --durability=balanced
+
+  node-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: node-3
+    ports:
+      - "4224:4222"
+      - "9092:9090"
+    volumes:
+      - node3-data:/var/lib/pulse
+    command:
+      - --listen=0.0.0.0:4222
+      - --durability=balanced
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:

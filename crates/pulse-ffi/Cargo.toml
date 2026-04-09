@@ -1,0 +1,15 @@
+[package]
+name = "pulse-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Pulse C ABI for foreign language SDKs"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+pulse-sdk = { path = "../pulse-sdk" }
+tokio = { workspace = true }
+rmpv = { version = "1", features = ["with-serde"] }

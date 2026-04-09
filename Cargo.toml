@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+exclude = ["sdks/python"]
+members = [
+    "crates/pulse-protocol",
+    "crates/pulse-cluster",
+    "crates/pulse-broker",
+    "crates/pulse-sdk",
+    "crates/pulse-admin",
+    "crates/pulse-ffi",
+    "crates/pulse-gateway",
+    "crates/pulse-demo",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Async
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# TLS
+rustls = "0.23"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+rmp-serde = "1"
+
+# Storage
+sled = "0.34"
+
+# Concurrency
+dashmap = "5"
+arc-swap = "1"
+
+# Protocol
+uuid = { version = "1", features = ["v7", "serde"] }
+crc32c = "0.6"
+bytes = "1"
+lz4_flex = "0.11"
+rand = "0.8"
+
+# Crypto
+hmac = "0.12"
+sha2 = "0.10"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Testing
+criterion = "0.5"

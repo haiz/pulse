@@ -1,0 +1,45 @@
+# Pulse Broker Configuration
+# All fields are optional — zero-config mode works with defaults.
+
+# Network
+listen_addr: "0.0.0.0:4222"
+
+# TLS (uncomment to enable)
+# tls:
+#   cert_path: "/etc/pulse/cert.pem"
+#   key_path: "/etc/pulse/key.pem"
+
+# Limits
+max_connections: 5000
+max_payload_bytes: 1048576  # 1 MB
+
+# Keepalive
+keepalive_interval_secs: 10
+keepalive_timeout_secs: 30
+connect_timeout_secs: 5
+
+# Durability: "memory" | "balanced" | "durable"
+durability:
+  mode: "balanced"
+  group_commit_interval_ms: 5
+  group_commit_max_batch: 100
+
+# Storage
+data_dir: "/var/lib/pulse"
+wal:
+  segment_size_bytes: 67108864  # 64 MB
+  sync_mode: "fsync"
+
+# Delivery
+delivery:
+  ack_timeout_secs: 30
+  max_redeliveries: 5
+  backoff:
+    initial_secs: 1
+    max_secs: 60
+    multiplier: 2.0
+
+# Metrics
+metrics:
+  enabled: true
+  listen_addr: "0.0.0.0:9090"
