@@ -73,21 +73,16 @@ fn default_backoff_multiplier() -> f64 {
 }
 
 /// Durability mode for event persistence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DurabilityMode {
     /// No WAL. In-memory only. ~800K msg/sec.
     Memory,
     /// Async WAL with group commit (fsync every 5ms). ~100K msg/sec.
+    #[default]
     Balanced,
     /// Per-event fsync. Exactly-once. ~10K msg/sec.
     Durable,
-}
-
-impl Default for DurabilityMode {
-    fn default() -> Self {
-        Self::Balanced
-    }
 }
 
 /// TLS configuration.

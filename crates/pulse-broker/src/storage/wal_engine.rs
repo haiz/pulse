@@ -7,20 +7,15 @@ use crate::error::BrokerError;
 use crate::storage::wal::{WalPosition, WalWriter};
 
 /// IO engine selection for WAL writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IoEngine {
     /// Standard tokio file I/O (all platforms).
     Tokio,
     /// io_uring via tokio-uring (Linux 5.6+ only).
     IoUring,
     /// Auto-detect: use io_uring on supported Linux, fallback to tokio.
+    #[default]
     Auto,
-}
-
-impl Default for IoEngine {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl IoEngine {
