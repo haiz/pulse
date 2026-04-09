@@ -304,7 +304,7 @@ impl WalWriter {
         match self.sync_mode {
             SyncMode::Fsync => self.active_file.sync_all().await?,
             SyncMode::Fdatasync => self.active_file.sync_data().await?,
-            SyncMode::None => {}
+            SyncMode::None => self.active_file.flush().await?,
         }
         Ok(())
     }
