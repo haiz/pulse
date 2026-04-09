@@ -723,10 +723,13 @@ mod tests {
                 .unwrap();
         }
 
-        // Corrupt a byte in the record (after the header)
+        // Corrupt a byte in the record (after the segment header)
         let path = segment_path(&wal_dir, 1);
         let mut data = tokio::fs::read(&path).await.unwrap();
-        data[40] ^= 0xFF; // flip a byte in the record area
+        // Flip the last byte before CRC — guaranteed to be within the record
+        // regardless of exact serialization size
+        let corrupt_idx = data.len() - 5; // last data byte before 4-byte CRC
+        data[corrupt_idx] ^= 0xFF;
         tokio::fs::write(&path, &data).await.unwrap();
 
         let mut reader = WalReader::open(path).await.unwrap();
