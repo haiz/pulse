@@ -148,6 +148,9 @@ impl ConnectionHandler {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
+        const INBOUND_BUDGET: u32 = 256;
+        let mut budget = INBOUND_BUDGET;
+
         let mut keepalive_timer = tokio::time::interval(keepalive_interval);
         keepalive_timer.tick().await; // skip first immediate tick
 
@@ -167,6 +170,12 @@ impl ConnectionHandler {
                     };
 
                     Self::handle_inbound(framed, broker, session, frame).await?;
+
+                    budget -= 1;
+                    if budget == 0 {
+                        tokio::task::yield_now().await;
+                        budget = INBOUND_BUDGET;
+                    }
                 }
 
                 // Outbound: events to deliver to this client
