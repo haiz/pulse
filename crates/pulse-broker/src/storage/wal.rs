@@ -123,6 +123,8 @@ pub struct WalWriter {
     segment_offset: u64,
     segment_max_size: u64,
     sync_mode: SyncMode,
+    /// Reusable buffer for encoding records, avoiding per-write allocations.
+    write_buf: Vec<u8>,
 }
 
 impl WalWriter {
@@ -152,6 +154,7 @@ impl WalWriter {
                 segment_offset: offset,
                 segment_max_size: config.segment_size_bytes,
                 sync_mode,
+                write_buf: Vec::with_capacity(8192),
             })
         } else {
             // No segments — create the first one
@@ -169,6 +172,7 @@ impl WalWriter {
                 segment_offset: SEGMENT_HEADER_SIZE,
                 segment_max_size: config.segment_size_bytes,
                 sync_mode,
+                write_buf: Vec::with_capacity(8192),
             })
         }
     }
@@ -230,16 +234,17 @@ impl WalWriter {
             offset: self.segment_offset,
         };
 
-        let mut buf = Vec::with_capacity(record_len);
-        buf.extend_from_slice(&(record_len as u32).to_be_bytes());
-        buf.push(record_type as u8);
-        buf.extend_from_slice(msg_id.as_bytes());
-        buf.extend_from_slice(data);
+        self.write_buf.clear();
+        self.write_buf.reserve(record_len);
+        self.write_buf.extend_from_slice(&(record_len as u32).to_be_bytes());
+        self.write_buf.push(record_type as u8);
+        self.write_buf.extend_from_slice(msg_id.as_bytes());
+        self.write_buf.extend_from_slice(data);
 
-        let crc = pulse_protocol::crc::compute(&buf);
-        buf.extend_from_slice(&crc.to_be_bytes());
+        let crc = pulse_protocol::crc::compute(&self.write_buf);
+        self.write_buf.extend_from_slice(&crc.to_be_bytes());
 
-        self.active_file.write_all(&buf).await?;
+        self.active_file.write_all(&self.write_buf).await?;
         self.segment_offset += record_len as u64;
         Ok(position)
     }
@@ -262,19 +267,20 @@ impl WalWriter {
             offset: self.segment_offset,
         };
 
-        // Build record bytes
-        let mut buf = Vec::with_capacity(record_len);
-        buf.extend_from_slice(&(record_len as u32).to_be_bytes()); // length
-        buf.push(record_type as u8); // type
-        buf.extend_from_slice(msg_id.as_bytes()); // msg_id
-        buf.extend_from_slice(data); // data
+        // Build record bytes into reusable buffer
+        self.write_buf.clear();
+        self.write_buf.reserve(record_len);
+        self.write_buf.extend_from_slice(&(record_len as u32).to_be_bytes()); // length
+        self.write_buf.push(record_type as u8); // type
+        self.write_buf.extend_from_slice(msg_id.as_bytes()); // msg_id
+        self.write_buf.extend_from_slice(data); // data
 
         // CRC over everything so far (before appending CRC itself)
-        let crc = pulse_protocol::crc::compute(&buf);
-        buf.extend_from_slice(&crc.to_be_bytes());
+        let crc = pulse_protocol::crc::compute(&self.write_buf);
+        self.write_buf.extend_from_slice(&crc.to_be_bytes());
 
         // Write + sync
-        self.active_file.write_all(&buf).await?;
+        self.active_file.write_all(&self.write_buf).await?;
         self.sync_internal().await?;
 
         self.segment_offset += record_len as u64;
