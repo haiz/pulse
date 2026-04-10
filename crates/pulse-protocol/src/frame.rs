@@ -165,6 +165,34 @@ impl Frame {
         Ok(buf.freeze())
     }
 
+    /// Encode this frame directly into a caller-provided buffer.
+    /// Avoids the intermediate BytesMut allocation of `encode()`.
+    pub fn encode_into(&self, dst: &mut BytesMut) -> Result<(), FrameError> {
+        let payload_bytes = self.serialize_payload()?;
+        let payload_len = payload_bytes.len() as u32;
+        let total_size = HEADER_SIZE + payload_bytes.len() + CRC_SIZE;
+
+        dst.reserve(total_size);
+        let crc_start = dst.len();
+
+        // Header
+        dst.put_slice(&MAGIC);
+        dst.put_u8(PROTOCOL_VERSION);
+        dst.put_u8(self.msg_type as u8);
+        dst.put_u8(self.flags.bits());
+        dst.put_slice(self.msg_id.as_bytes());
+        dst.put_u32(payload_len);
+
+        // Payload
+        dst.put_slice(&payload_bytes);
+
+        // CRC over header + payload just written
+        let checksum = crc::compute(&dst[crc_start..]);
+        dst.put_u32(checksum);
+
+        Ok(())
+    }
+
     // ─── Decode ───
 
     /// Decode a frame from a byte buffer.
@@ -986,5 +1014,36 @@ mod tests {
         let s = e.to_string();
         assert!(s.contains("2000000"));
         assert!(s.contains("1000000"));
+    }
+
+    #[test]
+    fn encode_into_matches_encode() {
+        use bytes::BytesMut;
+        let frames = vec![
+            Frame::ping(MessageId::new()),
+            Frame::pong(MessageId::new()),
+            Frame::publish(
+                MessageId::new(),
+                PubPayload {
+                    topic: "test.topic".into(),
+                    data: rmpv::Value::String("hello".into()),
+                    headers: std::collections::HashMap::new(),
+                    produced_at: None,
+                    delivery: None,
+                },
+            ),
+        ];
+
+        for frame in frames {
+            let encoded = frame.encode().unwrap();
+            let mut buf = BytesMut::new();
+            frame.encode_into(&mut buf).unwrap();
+            assert_eq!(
+                &encoded[..],
+                &buf[..],
+                "encode_into mismatch for {:?}",
+                frame.msg_type
+            );
+        }
     }
 }

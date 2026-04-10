@@ -66,9 +66,7 @@ impl Encoder<Frame> for PulseCodec {
     type Error = FrameError;
 
     fn encode(&mut self, frame: Frame, dst: &mut BytesMut) -> Result<(), FrameError> {
-        let encoded = frame.encode()?;
-        dst.extend_from_slice(&encoded);
-        Ok(())
+        frame.encode_into(dst)
     }
 }
 
