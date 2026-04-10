@@ -479,6 +479,32 @@ pub async fn replay_wal(wal_dir: &Path) -> Result<WalReplayResult, BrokerError> 
     })
 }
 
+/// Replay all shards of a sharded WAL directory.
+///
+/// Iterates shard-00/, shard-01/, etc. and combines results.
+pub async fn replay_wal_sharded(
+    wal_dir: &Path,
+    num_shards: usize,
+) -> Result<WalReplayResult, BrokerError> {
+    let mut combined = WalReplayResult {
+        event_ids: HashSet::new(),
+        last_segment: 0,
+        record_count: 0,
+    };
+
+    for i in 0..num_shards {
+        let shard_dir = wal_dir.join(format!("shard-{i:02}"));
+        if shard_dir.exists() {
+            let result = replay_wal(&shard_dir).await?;
+            combined.event_ids.extend(result.event_ids);
+            combined.last_segment = combined.last_segment.max(result.last_segment);
+            combined.record_count += result.record_count;
+        }
+    }
+
+    Ok(combined)
+}
+
 // ─── Helpers ───
 
 fn segment_path(wal_dir: &Path, segment_number: u32) -> PathBuf {
@@ -937,5 +963,32 @@ mod tests {
         assert_eq!(result.event_ids.len(), 2);
         assert!(result.event_ids.contains(&id1));
         assert!(result.event_ids.contains(&id2));
+    }
+
+    #[tokio::test]
+    async fn replay_sharded_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_dir = dir.path().join("wal");
+        let config = test_wal_config(64 * 1024 * 1024);
+
+        let num_shards = 4;
+        let mut all_ids = std::collections::HashSet::new();
+
+        // Write events to each shard
+        for shard in 0..num_shards {
+            let shard_dir = wal_dir.join(format!("shard-{shard:02}"));
+            let mut writer = WalWriter::open(shard_dir, &config).await.unwrap();
+            for _ in 0..5 {
+                let id = MessageId::new();
+                all_ids.insert(id);
+                writer.append_event(id, b"data").await.unwrap();
+            }
+        }
+
+        // Replay all shards
+        let result = replay_wal_sharded(&wal_dir, num_shards).await.unwrap();
+        assert_eq!(result.event_ids.len(), 20);
+        assert_eq!(result.record_count, 20);
+        assert_eq!(result.event_ids, all_ids);
     }
 }
