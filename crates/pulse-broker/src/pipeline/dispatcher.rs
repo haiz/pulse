@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 
 use pulse_protocol::{MessageId, PubPayload};
 
@@ -8,7 +8,7 @@ use crate::error::BrokerError;
 use crate::pipeline::dedup::{DedupEngine, DedupResult};
 use crate::pipeline::ingest::IngestResult;
 use crate::routing::Router;
-use crate::storage::wal::WalWriter;
+use crate::storage::sharded_wal::ShardedWalWriter;
 
 /// A message sent from a connection handler to the dispatcher.
 pub struct IngestMessage {
@@ -21,22 +21,19 @@ pub struct IngestMessage {
 /// Orchestrates the core ingest pipeline: dedup -> WAL -> ACK -> route -> deliver.
 pub struct Dispatcher {
     dedup: DedupEngine,
-    wal: Mutex<WalWriter>,
+    wal: ShardedWalWriter,
 }
 
 impl Dispatcher {
-    pub fn new(dedup: DedupEngine, wal: WalWriter) -> Self {
-        Self {
-            dedup,
-            wal: Mutex::new(wal),
-        }
+    pub fn new(dedup: DedupEngine, wal: ShardedWalWriter) -> Self {
+        Self { dedup, wal }
     }
 
     /// Spawn a dispatcher task that reads from an mpsc channel.
     /// After successful ingest, routes and delivers events to subscribers.
     pub fn spawn(
         dedup: DedupEngine,
-        wal: WalWriter,
+        wal: ShardedWalWriter,
         mut rx: mpsc::Receiver<IngestMessage>,
         router: Option<Arc<Router>>,
     ) -> tokio::task::JoinHandle<()> {
@@ -93,13 +90,11 @@ impl Dispatcher {
         };
 
         // 3. WAL append + fsync
-        let position = {
-            let mut wal = self.wal.lock().await;
-            match wal.append_event(msg_id, &data).await {
-                Ok(pos) => pos,
-                Err(e) => return IngestResult::Failed { error: e },
-            }
+        let sharded_pos = match self.wal.append_event(&pub_payload.topic, msg_id, &data).await {
+            Ok(pos) => pos,
+            Err(e) => return IngestResult::Failed { error: e },
         };
+        let position = sharded_pos.position;
 
         // 4. Dedup insert (after successful WAL write)
         if let Err(e) = self.dedup.insert(&msg_id, &pub_payload.topic) {
@@ -121,6 +116,7 @@ mod tests {
     use super::*;
     use crate::config::BrokerConfig;
     use crate::pipeline::dedup::DedupEngine;
+    use crate::storage::sharded_wal::ShardedWalWriter;
     use crate::storage::state_db::StateDb;
     use crate::storage::wal;
     use std::collections::HashMap;
@@ -130,7 +126,7 @@ mod tests {
         let config = BrokerConfig::for_testing(dir.path().to_path_buf());
 
         let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-        let wal = WalWriter::open(config.data_dir.join("wal"), &config.wal)
+        let wal = ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, 1)
             .await
             .unwrap();
         let dedup = DedupEngine::new(state_db);
@@ -178,7 +174,9 @@ mod tests {
         let wal_dir = config.data_dir.join("wal");
 
         let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-        let wal_writer = WalWriter::open(wal_dir.clone(), &config.wal).await.unwrap();
+        let wal_writer = ShardedWalWriter::open(wal_dir.clone(), &config.wal, 1)
+            .await
+            .unwrap();
         let dedup = DedupEngine::new(state_db);
         let dispatcher = Dispatcher::new(dedup, wal_writer);
 
@@ -188,8 +186,8 @@ mod tests {
         // Drop dispatcher to flush
         drop(dispatcher);
 
-        // Replay WAL — should find the event
-        let result = wal::replay_wal(&wal_dir).await.unwrap();
+        // Replay WAL — should find the event (shard-00 subdir)
+        let result = wal::replay_wal(&wal_dir.join("shard-00")).await.unwrap();
         assert!(result.event_ids.contains(&msg_id));
     }
 
@@ -202,7 +200,7 @@ mod tests {
         // Session 1: ingest an event
         {
             let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-            let wal = WalWriter::open(config.data_dir.join("wal"), &config.wal)
+            let wal = ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, 1)
                 .await
                 .unwrap();
             let dedup = DedupEngine::new(state_db);
@@ -215,7 +213,7 @@ mod tests {
         // Session 2: reopen — same msg_id should be duplicate
         {
             let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-            let wal = WalWriter::open(config.data_dir.join("wal"), &config.wal)
+            let wal = ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, 1)
                 .await
                 .unwrap();
             let dedup = DedupEngine::new(state_db);
@@ -269,7 +267,9 @@ mod tests {
         // Session 1: ingest 5 events
         {
             let state_db = Arc::new(StateDb::open(state_dir.clone()).unwrap());
-            let wal = WalWriter::open(wal_dir.clone(), &config.wal).await.unwrap();
+            let wal = ShardedWalWriter::open(wal_dir.clone(), &config.wal, 1)
+                .await
+                .unwrap();
             let dedup = DedupEngine::new(state_db);
             let dispatcher = Dispatcher::new(dedup, wal);
 
@@ -281,8 +281,8 @@ mod tests {
         // Simulate crash: delete state DB (but WAL survives)
         tokio::fs::remove_dir_all(&state_dir).await.unwrap();
 
-        // Session 2: rebuild dedup from WAL replay
-        let replay_result = wal::replay_wal(&wal_dir).await.unwrap();
+        // Session 2: rebuild dedup from WAL replay (shard-00 subdir)
+        let replay_result = wal::replay_wal(&wal_dir.join("shard-00")).await.unwrap();
         assert_eq!(replay_result.event_ids.len(), 5);
 
         let state_db = Arc::new(StateDb::open(state_dir).unwrap());
@@ -290,7 +290,9 @@ mod tests {
             .dedup_bulk_insert(replay_result.event_ids.into_iter())
             .unwrap();
 
-        let wal = WalWriter::open(wal_dir, &config.wal).await.unwrap();
+        let wal = ShardedWalWriter::open(wal_dir, &config.wal, 1)
+            .await
+            .unwrap();
         let dedup = DedupEngine::new(state_db);
         let dispatcher = Dispatcher::new(dedup, wal);
 
@@ -351,7 +353,7 @@ mod tests {
         let config = BrokerConfig::for_testing(dir.path().to_path_buf());
 
         let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-        let wal = WalWriter::open(config.data_dir.join("wal"), &config.wal)
+        let wal = ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, 1)
             .await
             .unwrap();
         let dedup = DedupEngine::new(state_db);

@@ -12,7 +12,8 @@ use pulse_broker::pipeline::dispatcher::Dispatcher;
 use pulse_broker::routing::Router;
 use pulse_broker::server::listener::Listener;
 use pulse_broker::storage::state_db::StateDb;
-use pulse_broker::storage::wal::{self, WalWriter};
+use pulse_broker::storage::sharded_wal::ShardedWalWriter;
+use pulse_broker::storage::wal;
 
 use pulse_gateway::GatewayState;
 use pulse_sdk::PulseBuilder;
@@ -50,8 +51,8 @@ async fn main() -> anyhow::Result<()> {
 
     let state_db = Arc::new(StateDb::open(config.data_dir.join("state"))?);
     let wal_dir = config.data_dir.join("wal");
-    let _ = wal::replay_wal(&wal_dir).await?;
-    let wal = WalWriter::open(wal_dir, &config.wal).await?;
+    let _ = wal::replay_wal_sharded(&wal_dir, config.wal.shards).await?;
+    let wal = ShardedWalWriter::open(wal_dir, &config.wal, config.wal.shards).await?;
 
     let router = Arc::new(Router::new());
     let delivery = DeliveryManager::new(&config.delivery, None);

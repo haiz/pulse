@@ -17,7 +17,8 @@ use pulse_broker::pipeline::dispatcher::Dispatcher;
 use pulse_broker::routing::Router;
 use pulse_broker::server::listener::Listener;
 use pulse_broker::storage::state_db::StateDb;
-use pulse_broker::storage::wal::{self, WalWriter};
+use pulse_broker::storage::sharded_wal::ShardedWalWriter;
+use pulse_broker::storage::wal;
 
 /// Start a broker on a random port and return the address + join handle.
 async fn start_broker() -> (std::net::SocketAddr, tempfile::TempDir) {
@@ -26,8 +27,8 @@ async fn start_broker() -> (std::net::SocketAddr, tempfile::TempDir) {
 
     let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
     let wal_dir = config.data_dir.join("wal");
-    let _ = wal::replay_wal(&wal_dir).await.unwrap();
-    let wal = WalWriter::open(wal_dir, &config.wal).await.unwrap();
+    let _ = wal::replay_wal_sharded(&wal_dir, config.wal.shards).await.unwrap();
+    let wal = ShardedWalWriter::open(wal_dir, &config.wal, config.wal.shards).await.unwrap();
 
     let dedup = DedupEngine::new(state_db.clone());
     let delivery = DeliveryManager::new(&config.delivery, None);

@@ -12,7 +12,8 @@ use pulse_broker::pipeline::dedup::DedupEngine;
 use pulse_broker::pipeline::dispatcher::Dispatcher;
 use pulse_broker::server::listener::Listener;
 use pulse_broker::storage::state_db::StateDb;
-use pulse_broker::storage::wal::{self, WalWriter};
+use pulse_broker::storage::sharded_wal::ShardedWalWriter;
+use pulse_broker::storage::wal;
 
 #[derive(Parser)]
 #[command(name = "pulse-broker", about = "Pulse event broker")]
@@ -86,7 +87,16 @@ async fn main() -> anyhow::Result<()> {
     let wal_dir = config.data_dir.join("wal");
 
     // WAL recovery: replay and rebuild dedup index
-    let replay = wal::replay_wal(&wal_dir).await?;
+    let replay = if config.wal.shards > 1 {
+        wal::replay_wal_sharded(&wal_dir, config.wal.shards).await?
+    } else {
+        let shard_dir = wal_dir.join("shard-00");
+        if shard_dir.exists() {
+            wal::replay_wal_sharded(&wal_dir, 1).await?
+        } else {
+            wal::replay_wal(&wal_dir).await?
+        }
+    };
     if replay.record_count > 0 {
         tracing::info!(
             events = replay.event_ids.len(),
@@ -101,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Open WAL writer
-    let wal = WalWriter::open(wal_dir, &config.wal).await?;
+    let wal = ShardedWalWriter::open(wal_dir, &config.wal, config.wal.shards).await?;
 
     // Build shared router and delivery
     let router = Arc::new(pulse_broker::routing::Router::new());
