@@ -107,6 +107,7 @@ mod tests {
         WalConfig {
             segment_size_bytes: 64 * 1024 * 1024,
             sync_mode: "none".into(),
+            shards: 1,
         }
     }
 

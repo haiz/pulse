@@ -545,6 +545,7 @@ mod tests {
         WalConfig {
             segment_size_bytes: segment_size,
             sync_mode: "none".into(),
+            shards: 1,
         }
     }
 

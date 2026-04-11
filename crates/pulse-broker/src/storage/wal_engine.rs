@@ -134,6 +134,7 @@ mod tests {
         let config = WalConfig {
             segment_size_bytes: 64 * 1024 * 1024,
             sync_mode: "none".into(),
+            shards: 1,
         };
 
         let engine = WalEngine::open(wal_dir, &config, IoEngine::Auto)
@@ -150,6 +151,7 @@ mod tests {
         let config = WalConfig {
             segment_size_bytes: 64 * 1024 * 1024,
             sync_mode: "none".into(),
+            shards: 1,
         };
 
         let mut engine = WalEngine::open(wal_dir, &config, IoEngine::Auto)

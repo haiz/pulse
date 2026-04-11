@@ -20,6 +20,10 @@ fn default_sync_mode() -> String {
     "fsync".into()
 }
 
+fn default_wal_shards() -> usize {
+    1
+}
+
 fn default_max_connections() -> usize {
     5000
 }
@@ -165,6 +169,8 @@ pub struct WalConfig {
     pub segment_size_bytes: u64,
     #[serde(default = "default_sync_mode")]
     pub sync_mode: String,
+    #[serde(default = "default_wal_shards")]
+    pub shards: usize,
 }
 
 /// Durability mode configuration.
@@ -205,6 +211,7 @@ impl Default for WalConfig {
         Self {
             segment_size_bytes: default_segment_size(),
             sync_mode: default_sync_mode(),
+            shards: default_wal_shards(),
         }
     }
 }
@@ -275,6 +282,7 @@ impl BrokerConfig {
             wal: WalConfig {
                 segment_size_bytes: default_segment_size(),
                 sync_mode: "none".into(),
+                shards: default_wal_shards(),
             },
             ..Default::default()
         }
