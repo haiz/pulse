@@ -2,6 +2,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use pulse_broker::config::WalConfig;
 use pulse_broker::storage::sharded_wal::ShardedWalWriter;
 use pulse_broker::storage::wal::WalWriter;
+use pulse_broker::storage::wal_thread::WalThreadHandle;
 use pulse_protocol::MessageId;
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,5 +167,41 @@ fn concurrent_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, sequential_benchmark, concurrent_benchmark);
+/// Writer-thread benchmark: measures `WalThreadHandle` (dedicated OS thread)
+/// vs the tokio::fs-based approaches above.
+fn thread_benchmark(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("wal_thread");
+    let data = vec![0xABu8; 256];
+
+    // Sequential: single caller writing to a dedicated writer thread
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("sequential", |b| {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config();
+        let handle = WalThreadHandle::spawn(
+            dir.path().join("wal"),
+            &config,
+            Duration::from_millis(100), // long interval — we measure per-write latency
+            10000,
+        )
+        .unwrap();
+
+        b.to_async(&rt).iter(|| {
+            let handle = &handle;
+            let data = data.clone();
+            async move {
+                handle.append_event(MessageId::new(), data).await.unwrap();
+            }
+        });
+
+        // Cleanup
+        rt.block_on(handle.sync()).unwrap();
+        handle.shutdown();
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, sequential_benchmark, concurrent_benchmark, thread_benchmark);
 criterion_main!(benches);
