@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -29,7 +30,14 @@ async fn start_broker() -> (std::net::SocketAddr, tempfile::TempDir) {
     let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
     let wal_dir = config.data_dir.join("wal");
     let _ = wal::replay_wal_sharded(&wal_dir, config.wal.shards).await.unwrap();
-    let wal = ShardedWalWriter::open(wal_dir, &config.wal, config.wal.shards).await.unwrap();
+    let wal = ShardedWalWriter::open(
+        wal_dir,
+        &config.wal,
+        config.wal.shards,
+        Duration::from_millis(5),
+        100,
+    )
+    .unwrap();
 
     let dedup = DedupEngine::new(state_db.clone());
     let delivery = DeliveryManager::new(&config.delivery, None);

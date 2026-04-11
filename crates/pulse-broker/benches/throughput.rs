@@ -41,11 +41,14 @@ fn setup_dispatcher(rt: &tokio::runtime::Runtime) -> (tempfile::TempDir, Arc<Dis
     let config = BrokerConfig::for_testing(dir.path().to_path_buf());
 
     let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-    let wal = rt.block_on(async {
-        ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, config.wal.shards)
-            .await
-            .unwrap()
-    });
+    let wal = ShardedWalWriter::open(
+        config.data_dir.join("wal"),
+        &config.wal,
+        config.wal.shards,
+        std::time::Duration::from_millis(5),
+        100,
+    )
+    .unwrap();
     let dedup = DedupEngine::new(state_db);
     let dispatcher = Arc::new(Dispatcher::new(dedup, wal));
     (dir, dispatcher)

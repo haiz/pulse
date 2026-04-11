@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use std::time::Duration;
+
 use clap::Parser;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
@@ -112,7 +114,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Open WAL writer
-    let wal = ShardedWalWriter::open(wal_dir, &config.wal, config.wal.shards).await?;
+    let flush_interval = Duration::from_millis(config.durability.group_commit_interval_ms);
+    let max_batch = config.durability.group_commit_max_batch;
+    let wal = ShardedWalWriter::open(
+        wal_dir,
+        &config.wal,
+        config.wal.shards,
+        flush_interval,
+        max_batch,
+    )?;
 
     // Build shared router and delivery
     let router = Arc::new(pulse_broker::routing::Router::new());

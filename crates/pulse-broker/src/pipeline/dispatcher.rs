@@ -101,7 +101,7 @@ impl Dispatcher {
         };
 
         // 3. WAL append + fsync
-        let sharded_pos = match self.wal.append_event(&pub_payload.topic, msg_id, &data).await {
+        let sharded_pos = match self.wal.append_event(&pub_payload.topic, msg_id, data).await {
             Ok(pos) => pos,
             Err(e) => return IngestResult::Failed { error: e },
         };
@@ -131,15 +131,21 @@ mod tests {
     use crate::storage::state_db::StateDb;
     use crate::storage::wal;
     use std::collections::HashMap;
+    use std::time::Duration;
 
     async fn setup() -> (tempfile::TempDir, Dispatcher) {
         let dir = tempfile::tempdir().unwrap();
         let config = BrokerConfig::for_testing(dir.path().to_path_buf());
 
         let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-        let wal = ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, 1)
-            .await
-            .unwrap();
+        let wal = ShardedWalWriter::open(
+            config.data_dir.join("wal"),
+            &config.wal,
+            1,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
         let dedup = DedupEngine::new(state_db);
 
         (dir, Dispatcher::new(dedup, wal))
@@ -186,16 +192,25 @@ mod tests {
         let wal_dir = config.data_dir.join("wal");
 
         let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-        let wal_writer = ShardedWalWriter::open(wal_dir.clone(), &config.wal, 1)
-            .await
-            .unwrap();
+        let wal_writer = ShardedWalWriter::open(
+            wal_dir.clone(),
+            &config.wal,
+            1,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
         let dedup = DedupEngine::new(state_db);
         let dispatcher = Dispatcher::new(dedup, wal_writer);
 
         let msg_id = MessageId::new();
         dispatcher.ingest(msg_id, &test_pub_payload("test")).await;
 
-        // Drop dispatcher to flush
+        // Sync + shutdown to flush writer thread
+        dispatcher.wal.sync_all().await.unwrap();
+        dispatcher.wal.shutdown();
+        // Small delay for thread exit
+        tokio::time::sleep(Duration::from_millis(50)).await;
         drop(dispatcher);
 
         // Replay WAL — should find the event (shard-00 subdir)
@@ -212,27 +227,41 @@ mod tests {
         // Session 1: ingest an event
         {
             let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-            let wal = ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, 1)
-                .await
-                .unwrap();
+            let wal = ShardedWalWriter::open(
+                config.data_dir.join("wal"),
+                &config.wal,
+                1,
+                Duration::from_millis(5),
+                100,
+            )
+            .unwrap();
             let dedup = DedupEngine::new(state_db);
             let dispatcher = Dispatcher::new(dedup, wal);
 
             let result = dispatcher.ingest(msg_id, &test_pub_payload("t")).await;
             assert!(matches!(result, IngestResult::Stored { .. }));
+            dispatcher.wal.sync_all().await.unwrap();
+            dispatcher.wal.shutdown();
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         // Session 2: reopen — same msg_id should be duplicate
         {
             let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-            let wal = ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, 1)
-                .await
-                .unwrap();
+            let wal = ShardedWalWriter::open(
+                config.data_dir.join("wal"),
+                &config.wal,
+                1,
+                Duration::from_millis(5),
+                100,
+            )
+            .unwrap();
             let dedup = DedupEngine::new(state_db);
             let dispatcher = Dispatcher::new(dedup, wal);
 
             let result = dispatcher.ingest(msg_id, &test_pub_payload("t")).await;
             assert!(matches!(result, IngestResult::Duplicate));
+            dispatcher.wal.shutdown();
         }
     }
 
@@ -279,15 +308,23 @@ mod tests {
         // Session 1: ingest 5 events
         {
             let state_db = Arc::new(StateDb::open(state_dir.clone()).unwrap());
-            let wal = ShardedWalWriter::open(wal_dir.clone(), &config.wal, 1)
-                .await
-                .unwrap();
+            let wal = ShardedWalWriter::open(
+                wal_dir.clone(),
+                &config.wal,
+                1,
+                Duration::from_millis(5),
+                100,
+            )
+            .unwrap();
             let dedup = DedupEngine::new(state_db);
             let dispatcher = Dispatcher::new(dedup, wal);
 
             for &id in &ids {
                 dispatcher.ingest(id, &test_pub_payload("t")).await;
             }
+            dispatcher.wal.sync_all().await.unwrap();
+            dispatcher.wal.shutdown();
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         // Simulate crash: delete state DB (but WAL survives)
@@ -302,9 +339,14 @@ mod tests {
             .dedup_bulk_insert(replay_result.event_ids.into_iter())
             .unwrap();
 
-        let wal = ShardedWalWriter::open(wal_dir, &config.wal, 1)
-            .await
-            .unwrap();
+        let wal = ShardedWalWriter::open(
+            wal_dir,
+            &config.wal,
+            1,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
         let dedup = DedupEngine::new(state_db);
         let dispatcher = Dispatcher::new(dedup, wal);
 
@@ -366,9 +408,14 @@ mod tests {
         let config = BrokerConfig::for_testing(dir.path().to_path_buf());
 
         let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
-        let wal = ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, 1)
-            .await
-            .unwrap();
+        let wal = ShardedWalWriter::open(
+            config.data_dir.join("wal"),
+            &config.wal,
+            1,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
         let dedup = DedupEngine::new(state_db);
 
         let (tx, rx) = mpsc::channel(64);

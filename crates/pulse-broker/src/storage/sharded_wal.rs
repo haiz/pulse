@@ -1,12 +1,12 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-
-use tokio::sync::Mutex;
+use std::time::Duration;
 
 use crate::config::WalConfig;
 use crate::error::BrokerError;
-use crate::storage::wal::{WalPosition, WalWriter};
+use crate::storage::wal::WalPosition;
+use crate::storage::wal_thread::WalThreadHandle;
 use pulse_protocol::MessageId;
 
 /// Position of a record within a specific WAL shard.
@@ -16,31 +16,32 @@ pub struct ShardedWalPosition {
     pub position: WalPosition,
 }
 
-/// A WAL writer that owns N `WalWriter`s, routing writes by topic hash.
+/// A WAL writer that owns N `WalThreadHandle`s, routing writes by topic hash.
 ///
-/// Each shard has its own segment files in a subdirectory (`shard-00/`, `shard-01/`, etc.).
-/// This allows concurrent writes to different topics to avoid contention on a single WAL.
+/// Each shard has its own segment files in a subdirectory (`shard-00/`, `shard-01/`, etc.)
+/// and a dedicated OS thread for all file I/O — no Mutex contention, no tokio::fs overhead.
 pub struct ShardedWalWriter {
-    shards: Vec<Mutex<WalWriter>>,
+    shards: Vec<WalThreadHandle>,
     num_shards: usize,
 }
 
 impl ShardedWalWriter {
-    /// Open or create N shard directories under `wal_dir`, each containing a `WalWriter`.
-    pub async fn open(
+    /// Open or create N shard directories, each with a dedicated writer thread.
+    /// This is SYNCHRONOUS (not async) — call during initialization.
+    pub fn open(
         wal_dir: PathBuf,
         config: &WalConfig,
         num_shards: usize,
+        flush_interval: Duration,
+        max_batch: usize,
     ) -> Result<Self, BrokerError> {
         assert!(num_shards > 0, "num_shards must be >= 1");
-
         let mut shards = Vec::with_capacity(num_shards);
         for i in 0..num_shards {
             let shard_dir = wal_dir.join(format!("shard-{i:02}"));
-            let writer = WalWriter::open(shard_dir, config).await?;
-            shards.push(Mutex::new(writer));
+            let handle = WalThreadHandle::spawn(shard_dir, config, flush_interval, max_batch)?;
+            shards.push(handle);
         }
-
         Ok(Self { shards, num_shards })
     }
 
@@ -51,43 +52,31 @@ impl ShardedWalWriter {
         (hasher.finish() as usize) % self.num_shards
     }
 
-    /// Append an event to the shard determined by `topic`, with sync.
+    /// Append an event to the shard determined by `topic`.
+    /// NOTE: data is `Vec<u8>` (moved to writer thread), not `&[u8]`.
     pub async fn append_event(
         &self,
         topic: &str,
         msg_id: MessageId,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<ShardedWalPosition, BrokerError> {
-        let shard = self.shard_for(topic);
-        let mut writer = self.shards[shard].lock().await;
-        let position = writer.append_event(msg_id, data).await?;
-        Ok(ShardedWalPosition { shard, position })
-    }
-
-    /// Append an event without sync (for group commit).
-    pub async fn append_event_no_sync(
-        &self,
-        topic: &str,
-        msg_id: MessageId,
-        data: &[u8],
-    ) -> Result<ShardedWalPosition, BrokerError> {
-        let shard = self.shard_for(topic);
-        let mut writer = self.shards[shard].lock().await;
-        let position = writer.append_event_no_sync(msg_id, data).await?;
-        Ok(ShardedWalPosition { shard, position })
+        let shard_idx = self.shard_for(topic);
+        let position = self.shards[shard_idx].append_event(msg_id, data).await?;
+        Ok(ShardedWalPosition {
+            shard: shard_idx,
+            position,
+        })
     }
 
     /// Sync a single shard to disk.
     pub async fn sync_shard(&self, shard_idx: usize) -> Result<(), BrokerError> {
-        let mut writer = self.shards[shard_idx].lock().await;
-        writer.sync().await
+        self.shards[shard_idx].sync().await
     }
 
     /// Sync all shards to disk.
     pub async fn sync_all(&self) -> Result<(), BrokerError> {
         for shard in &self.shards {
-            let mut writer = shard.lock().await;
-            writer.sync().await?;
+            shard.sync().await?;
         }
         Ok(())
     }
@@ -95,6 +84,13 @@ impl ShardedWalWriter {
     /// Return the number of shards.
     pub fn num_shards(&self) -> usize {
         self.num_shards
+    }
+
+    /// Request a graceful shutdown of all writer threads.
+    pub fn shutdown(&self) {
+        for shard in &self.shards {
+            shard.shutdown();
+        }
     }
 }
 
@@ -117,7 +113,14 @@ mod tests {
         let wal_dir = dir.path().join("wal");
         let config = test_wal_config();
 
-        let sharded = ShardedWalWriter::open(wal_dir, &config, 4).await.unwrap();
+        let sharded = ShardedWalWriter::open(
+            wal_dir,
+            &config,
+            4,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
 
         // Same topic always maps to the same shard
         let shard_a1 = sharded.shard_for("orders.created");
@@ -129,11 +132,13 @@ mod tests {
         for topic in &topics {
             let expected_shard = sharded.shard_for(topic);
             let pos = sharded
-                .append_event(topic, MessageId::new(), b"data")
+                .append_event(topic, MessageId::new(), b"data".to_vec())
                 .await
                 .unwrap();
             assert_eq!(pos.shard, expected_shard);
         }
+
+        sharded.shutdown();
     }
 
     #[tokio::test]
@@ -142,15 +147,22 @@ mod tests {
         let wal_dir = dir.path().join("wal");
         let config = test_wal_config();
 
-        let _sharded = ShardedWalWriter::open(wal_dir.clone(), &config, 4)
-            .await
-            .unwrap();
+        let sharded = ShardedWalWriter::open(
+            wal_dir.clone(),
+            &config,
+            4,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
 
         for i in 0..4 {
             let shard_dir = wal_dir.join(format!("shard-{i:02}"));
             assert!(shard_dir.exists(), "shard-{i:02}/ should exist");
             assert!(shard_dir.is_dir(), "shard-{i:02}/ should be a directory");
         }
+
+        sharded.shutdown();
     }
 
     #[tokio::test]
@@ -159,7 +171,14 @@ mod tests {
         let wal_dir = dir.path().join("wal");
         let config = test_wal_config();
 
-        let sharded = ShardedWalWriter::open(wal_dir, &config, 1).await.unwrap();
+        let sharded = ShardedWalWriter::open(
+            wal_dir,
+            &config,
+            1,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
 
         // Every topic maps to shard 0
         assert_eq!(sharded.shard_for("topic-a"), 0);
@@ -167,10 +186,12 @@ mod tests {
         assert_eq!(sharded.shard_for("topic-c"), 0);
 
         let pos = sharded
-            .append_event("any-topic", MessageId::new(), b"hello")
+            .append_event("any-topic", MessageId::new(), b"hello".to_vec())
             .await
             .unwrap();
         assert_eq!(pos.shard, 0);
+
+        sharded.shutdown();
     }
 
     #[tokio::test]
@@ -179,19 +200,27 @@ mod tests {
         let wal_dir = dir.path().join("wal");
         let config = test_wal_config();
 
-        let sharded = ShardedWalWriter::open(wal_dir, &config, 4).await.unwrap();
+        let sharded = ShardedWalWriter::open(
+            wal_dir,
+            &config,
+            4,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
 
         // Write events to various shards
         for i in 0..10 {
             let topic = format!("topic-{i}");
             sharded
-                .append_event_no_sync(&topic, MessageId::new(), b"payload")
+                .append_event(&topic, MessageId::new(), b"payload".to_vec())
                 .await
                 .unwrap();
         }
 
         // sync_all should succeed without errors
         sharded.sync_all().await.unwrap();
+        sharded.shutdown();
     }
 
     #[tokio::test]
@@ -201,7 +230,14 @@ mod tests {
         let config = test_wal_config();
 
         let sharded = Arc::new(
-            ShardedWalWriter::open(wal_dir, &config, 4).await.unwrap(),
+            ShardedWalWriter::open(
+                wal_dir,
+                &config,
+                4,
+                Duration::from_millis(5),
+                100,
+            )
+            .unwrap(),
         );
 
         let topics = ["alpha", "beta", "gamma", "delta", "epsilon"];
@@ -212,7 +248,7 @@ mod tests {
             let topic = topics[i % topics.len()].to_string();
             handles.push(tokio::spawn(async move {
                 writer
-                    .append_event(&topic, MessageId::new(), b"concurrent-data")
+                    .append_event(&topic, MessageId::new(), b"concurrent-data".to_vec())
                     .await
             }));
         }
@@ -221,5 +257,7 @@ mod tests {
             let result = handle.await.unwrap();
             assert!(result.is_ok(), "concurrent write should succeed");
         }
+
+        sharded.shutdown();
     }
 }

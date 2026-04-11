@@ -4,6 +4,7 @@ use pulse_broker::storage::sharded_wal::ShardedWalWriter;
 use pulse_broker::storage::wal::WalWriter;
 use pulse_protocol::MessageId;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 
@@ -47,15 +48,20 @@ fn sequential_benchmark(c: &mut Criterion) {
     group.bench_function("sharded_1", |b| {
         let dir = tempfile::tempdir().unwrap();
         let config = test_config();
-        let wal = rt
-            .block_on(ShardedWalWriter::open(dir.path().join("wal"), &config, 1))
-            .unwrap();
+        let wal = ShardedWalWriter::open(
+            dir.path().join("wal"),
+            &config,
+            1,
+            Duration::from_millis(5),
+            100,
+        )
+        .unwrap();
         // Pre-compute shard routing to isolate WAL write cost
         let topic = "bench.topic.0";
 
         b.to_async(&rt).iter(|| {
             let wal = &wal;
-            let data = &data;
+            let data = data.clone();
             async move {
                 wal.append_event(topic, MessageId::new(), data)
                     .await
@@ -119,11 +125,13 @@ fn concurrent_benchmark(c: &mut Criterion) {
                 let dir = tempfile::tempdir().unwrap();
                 let config = test_config();
                 let wal = Arc::new(
-                    rt.block_on(ShardedWalWriter::open(
+                    ShardedWalWriter::open(
                         dir.path().join("wal"),
                         &config,
                         shards,
-                    ))
+                        Duration::from_millis(5),
+                        100,
+                    )
                     .unwrap(),
                 );
 
@@ -140,7 +148,7 @@ fn concurrent_benchmark(c: &mut Criterion) {
                             handles.push(tokio::spawn(async move {
                                 for j in 0..writes_per_task {
                                     let topic = &t[j % t.len()];
-                                    w.append_event(topic, MessageId::new(), &d)
+                                    w.append_event(topic, MessageId::new(), d.clone())
                                         .await
                                         .unwrap();
                                 }
