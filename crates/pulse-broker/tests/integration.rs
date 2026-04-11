@@ -109,6 +109,7 @@ async fn publish_and_receive_ack() {
             headers: HashMap::new(),
             produced_at: None,
             delivery: None,
+            raw_payload: None,
         },
     );
     client.send(pub_frame).await.unwrap();
@@ -135,6 +136,7 @@ async fn publish_duplicate_returns_duplicate_ack() {
         headers: HashMap::new(),
         produced_at: None,
         delivery: None,
+        raw_payload: None,
     };
 
     // First publish
@@ -189,6 +191,7 @@ async fn multiple_publishes() {
                 headers: HashMap::new(),
                 produced_at: None,
                 delivery: None,
+                raw_payload: None,
             },
         );
         client.send(pub_frame).await.unwrap();
@@ -220,6 +223,7 @@ async fn multiple_clients() {
                 headers: HashMap::new(),
                 produced_at: None,
                 delivery: None,
+                raw_payload: None,
             },
         );
         client.send(pub_frame).await.unwrap();
@@ -260,6 +264,7 @@ async fn end_to_end_pub_sub_delivery() {
             headers: HashMap::new(),
             produced_at: None,
             delivery: None,
+            raw_payload: None,
         },
     );
     publisher.send(pub_frame).await.unwrap();
@@ -314,6 +319,7 @@ async fn subscriber_does_not_receive_unmatched_topic() {
                 headers: HashMap::new(),
                 produced_at: None,
                 delivery: None,
+                raw_payload: None,
             },
         ))
         .await
@@ -367,6 +373,7 @@ async fn multiple_subscribers_receive_same_event() {
                 headers: HashMap::new(),
                 produced_at: None,
                 delivery: None,
+                raw_payload: None,
             },
         ))
         .await

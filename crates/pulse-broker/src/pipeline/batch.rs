@@ -209,6 +209,7 @@ mod tests {
             headers: HashMap::new(),
             produced_at: None,
             delivery: None,
+            raw_payload: None,
         }
     }
 

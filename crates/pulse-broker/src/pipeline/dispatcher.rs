@@ -86,12 +86,16 @@ impl Dispatcher {
             Err(e) => return IngestResult::Failed { error: e },
         }
 
-        // 2. Serialize payload for WAL
-        let data = match rmp_serde::to_vec_named(pub_payload) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                return IngestResult::Failed {
-                    error: BrokerError::Serialize(e.to_string()),
+        // 2. Get payload bytes for WAL — use raw wire bytes if available, else serialize
+        let data = if let Some(raw) = &pub_payload.raw_payload {
+            raw.to_vec()
+        } else {
+            match rmp_serde::to_vec_named(pub_payload) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    return IngestResult::Failed {
+                        error: BrokerError::Serialize(e.to_string()),
+                    }
                 }
             }
         };
@@ -148,6 +152,7 @@ mod tests {
             headers: HashMap::new(),
             produced_at: None,
             delivery: None,
+            raw_payload: None,
         }
     }
 
@@ -348,6 +353,7 @@ mod tests {
             ]),
             produced_at: Some(1700000000000),
             delivery: None,
+            raw_payload: None,
         };
 
         let result = dispatcher.ingest(MessageId::new(), &payload).await;

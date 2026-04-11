@@ -306,6 +306,7 @@ mod tests {
                 headers: std::collections::HashMap::new(),
                 produced_at: None,
                 delivery: None,
+                raw_payload: None,
             },
         );
 

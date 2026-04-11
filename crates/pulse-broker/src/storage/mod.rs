@@ -5,3 +5,4 @@ pub mod sharded_wal;
 pub mod state_db;
 pub mod wal;
 pub mod wal_engine;
+pub mod wal_record;

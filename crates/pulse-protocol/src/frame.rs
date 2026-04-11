@@ -335,8 +335,9 @@ impl Frame {
                 Ok(Payload::ConnAck(p))
             }
             MessageType::Pub => {
-                let p: PubPayload = rmp_serde::from_slice(data)
+                let mut p: PubPayload = rmp_serde::from_slice(data)
                     .map_err(|e| FrameError::Deserialize(e.to_string()))?;
+                p.raw_payload = Some(bytes::Bytes::copy_from_slice(data));
                 Ok(Payload::Pub(p))
             }
             MessageType::Ack => {
@@ -450,6 +451,7 @@ mod tests {
                 headers,
                 produced_at: Some(1700000000000),
                 delivery: None,
+                raw_payload: None,
             },
         );
 
@@ -915,6 +917,7 @@ mod tests {
                 headers: HashMap::new(),
                 produced_at: None,
                 delivery: None,
+                raw_payload: None,
             },
         );
 
@@ -947,6 +950,7 @@ mod tests {
                     first_sent: 1700000000000,
                     msg_id: original_id.as_bytes().to_vec(),
                 }),
+                raw_payload: None,
             },
         );
 
@@ -1017,6 +1021,37 @@ mod tests {
     }
 
     #[test]
+    fn pub_frame_preserves_raw_payload() {
+        let frame = Frame::publish(
+            MessageId::new(),
+            PubPayload {
+                topic: "test.topic".into(),
+                data: rmpv::Value::String("hello".into()),
+                headers: std::collections::HashMap::new(),
+                produced_at: None,
+                delivery: None,
+                raw_payload: None,
+            },
+        );
+
+        let encoded = frame.encode().unwrap();
+        let decoded = Frame::decode(&encoded, DEFAULT_MAX_PAYLOAD_SIZE).unwrap();
+
+        if let Payload::Pub(p) = &decoded.payload {
+            assert!(
+                p.raw_payload.is_some(),
+                "raw_payload should be set after decode"
+            );
+            let raw = p.raw_payload.as_ref().unwrap();
+            // Re-serializing should produce the same bytes
+            let reserialized = rmp_serde::to_vec_named(p).unwrap();
+            assert_eq!(raw.as_ref(), reserialized.as_slice());
+        } else {
+            panic!("expected Pub payload");
+        }
+    }
+
+    #[test]
     fn encode_into_matches_encode() {
         use bytes::BytesMut;
         let frames = vec![
@@ -1030,6 +1065,7 @@ mod tests {
                     headers: std::collections::HashMap::new(),
                     produced_at: None,
                     delivery: None,
+                    raw_payload: None,
                 },
             ),
         ];

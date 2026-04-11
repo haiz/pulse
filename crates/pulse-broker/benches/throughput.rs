@@ -10,6 +10,7 @@ use pulse_broker::config::BrokerConfig;
 use pulse_broker::pipeline::dedup::DedupEngine;
 use pulse_broker::pipeline::dispatcher::Dispatcher;
 use pulse_broker::storage::state_db::StateDb;
+use pulse_broker::storage::sharded_wal::ShardedWalWriter;
 use pulse_broker::storage::wal::WalWriter;
 
 fn small_payload() -> PubPayload {
@@ -19,6 +20,7 @@ fn small_payload() -> PubPayload {
         headers: HashMap::new(),
         produced_at: None,
         delivery: None,
+        raw_payload: None,
     }
 }
 
@@ -30,6 +32,7 @@ fn large_payload(size_kb: usize) -> PubPayload {
         headers: HashMap::from([("trace_id".into(), "abc123".into())]),
         produced_at: Some(1700000000000),
         delivery: None,
+        raw_payload: None,
     }
 }
 
@@ -39,7 +42,7 @@ fn setup_dispatcher(rt: &tokio::runtime::Runtime) -> (tempfile::TempDir, Arc<Dis
 
     let state_db = Arc::new(StateDb::open(config.data_dir.join("state")).unwrap());
     let wal = rt.block_on(async {
-        WalWriter::open(config.data_dir.join("wal"), &config.wal)
+        ShardedWalWriter::open(config.data_dir.join("wal"), &config.wal, config.wal.shards)
             .await
             .unwrap()
     });

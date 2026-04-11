@@ -34,6 +34,7 @@ pub async fn publish(
                     .as_millis() as u64,
             ),
             delivery: None,
+            raw_payload: None,
         },
     );
 

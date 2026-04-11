@@ -6,6 +6,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use crate::config::WalConfig;
 use crate::error::BrokerError;
+use crate::storage::wal_record::{encode_record, RecordType, RECORD_OVERHEAD};
 
 // ─── Constants ───
 
@@ -13,8 +14,6 @@ use crate::error::BrokerError;
 pub const WAL_MAGIC: [u8; 4] = [0x50, 0x4C, 0x57, 0x4C];
 pub const WAL_VERSION: u8 = 0x01;
 pub const SEGMENT_HEADER_SIZE: u64 = 32;
-/// Minimum record size: length(4) + type(1) + msg_id(16) + crc(4) = 25 (no data).
-const RECORD_OVERHEAD: usize = 25;
 
 // ─── Types ───
 
@@ -40,24 +39,6 @@ impl SyncMode {
             "fdatasync" => Ok(Self::Fdatasync),
             "none" => Ok(Self::None),
             other => Err(BrokerError::Config(format!("unknown sync_mode: {other}"))),
-        }
-    }
-}
-
-/// Record types stored in WAL segments.
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecordType {
-    EventWrite = 0x01,
-    Completion = 0x02,
-}
-
-impl RecordType {
-    fn from_u8(v: u8) -> Option<Self> {
-        match v {
-            0x01 => Some(Self::EventWrite),
-            0x02 => Some(Self::Completion),
-            _ => None,
         }
     }
 }
@@ -234,15 +215,7 @@ impl WalWriter {
             offset: self.segment_offset,
         };
 
-        self.write_buf.clear();
-        self.write_buf.reserve(record_len);
-        self.write_buf.extend_from_slice(&(record_len as u32).to_be_bytes());
-        self.write_buf.push(record_type as u8);
-        self.write_buf.extend_from_slice(msg_id.as_bytes());
-        self.write_buf.extend_from_slice(data);
-
-        let crc = pulse_protocol::crc::compute(&self.write_buf);
-        self.write_buf.extend_from_slice(&crc.to_be_bytes());
+        encode_record(&mut self.write_buf, record_type, msg_id, data);
 
         self.active_file.write_all(&self.write_buf).await?;
         self.segment_offset += record_len as u64;
@@ -267,17 +240,7 @@ impl WalWriter {
             offset: self.segment_offset,
         };
 
-        // Build record bytes into reusable buffer
-        self.write_buf.clear();
-        self.write_buf.reserve(record_len);
-        self.write_buf.extend_from_slice(&(record_len as u32).to_be_bytes()); // length
-        self.write_buf.push(record_type as u8); // type
-        self.write_buf.extend_from_slice(msg_id.as_bytes()); // msg_id
-        self.write_buf.extend_from_slice(data); // data
-
-        // CRC over everything so far (before appending CRC itself)
-        let crc = pulse_protocol::crc::compute(&self.write_buf);
-        self.write_buf.extend_from_slice(&crc.to_be_bytes());
+        encode_record(&mut self.write_buf, record_type, msg_id, data);
 
         // Write + sync
         self.active_file.write_all(&self.write_buf).await?;

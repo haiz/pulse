@@ -163,6 +163,9 @@ pub struct PubPayload {
     /// Added by broker on delivery to consumers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<DeliveryInfo>,
+    /// Raw MessagePack bytes from the wire. Set during decode, used for WAL writes.
+    #[serde(skip)]
+    pub raw_payload: Option<bytes::Bytes>,
 }
 
 /// Delivery metadata appended by broker when delivering to consumers.
@@ -350,6 +353,7 @@ mod tests {
             headers: HashMap::new(),
             produced_at: None,
             delivery: None,
+            raw_payload: None,
         });
         assert_eq!(pub_payload.message_type(), MessageType::Pub);
 
@@ -465,6 +469,7 @@ mod tests {
             headers: HashMap::new(),
             produced_at: None,
             delivery: None,
+            raw_payload: None,
         };
         let bytes = rmp_serde::to_vec_named(&payload).unwrap();
         let decoded: PubPayload = rmp_serde::from_slice(&bytes).unwrap();
@@ -485,6 +490,7 @@ mod tests {
                 first_sent: 1700000000000,
                 msg_id: vec![0x01; 16],
             }),
+            raw_payload: None,
         };
         let bytes = rmp_serde::to_vec_named(&payload).unwrap();
         let decoded: PubPayload = rmp_serde::from_slice(&bytes).unwrap();
