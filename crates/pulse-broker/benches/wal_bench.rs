@@ -5,78 +5,150 @@ use pulse_broker::storage::wal::WalWriter;
 use pulse_protocol::MessageId;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
 
-fn wal_write_benchmark(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("wal_write");
-
-    // ── Single writer: vary payload size ──
-
-    for payload_size in [64, 256, 1024, 4096] {
-        let data = vec![0xABu8; payload_size];
-
-        group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("single_writer", payload_size),
-            &payload_size,
-            |b, _| {
-                let dir = tempfile::tempdir().unwrap();
-                let config = WalConfig {
-                    segment_size_bytes: 256 * 1024 * 1024,
-                    sync_mode: "none".into(),
-                    shards: 1,
-                };
-                let writer = rt
-                    .block_on(WalWriter::open(dir.path().join("wal"), &config))
-                    .unwrap();
-                let writer = Arc::new(tokio::sync::Mutex::new(writer));
-
-                b.to_async(&rt).iter(|| {
-                    let w = writer.clone();
-                    let data = data.clone();
-                    async move {
-                        let mut wal = w.lock().await;
-                        wal.append_event(MessageId::new(), &data).await.unwrap();
-                    }
-                });
-            },
-        );
+fn test_config() -> WalConfig {
+    WalConfig {
+        segment_size_bytes: 256 * 1024 * 1024,
+        sync_mode: "none".into(),
+        shards: 1,
     }
+}
 
-    // ── Sharded writer: vary shard count ──
+/// Sequential benchmark: one task writing as fast as possible.
+/// Measures raw per-write overhead.
+fn sequential_benchmark(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("wal_sequential");
+    let data = vec![0xABu8; 256];
 
-    for num_shards in [1, 2, 4, 8] {
-        let data = vec![0xABu8; 256];
+    // Baseline: Mutex<WalWriter> (old architecture)
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("mutex_walwriter", |b| {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config();
+        let writer = rt
+            .block_on(WalWriter::open(dir.path().join("wal"), &config))
+            .unwrap();
+        let writer = Mutex::new(writer);
 
-        group.throughput(Throughput::Elements(1));
+        b.to_async(&rt).iter(|| {
+            let writer = &writer;
+            let data = &data;
+            async move {
+                let mut wal = writer.lock().await;
+                wal.append_event(MessageId::new(), data).await.unwrap();
+            }
+        });
+    });
+
+    // ShardedWalWriter with 1 shard (new architecture, should be ~same)
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("sharded_1", |b| {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config();
+        let wal = rt
+            .block_on(ShardedWalWriter::open(dir.path().join("wal"), &config, 1))
+            .unwrap();
+        // Pre-compute shard routing to isolate WAL write cost
+        let topic = "bench.topic.0";
+
+        b.to_async(&rt).iter(|| {
+            let wal = &wal;
+            let data = &data;
+            async move {
+                wal.append_event(topic, MessageId::new(), data)
+                    .await
+                    .unwrap();
+            }
+        });
+    });
+
+    group.finish();
+}
+
+/// Concurrent benchmark: N tasks writing simultaneously.
+/// This is where sharding should shine.
+fn concurrent_benchmark(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("wal_concurrent");
+    let topics: Vec<String> = (0..100).map(|i| format!("bench.topic.{i}")).collect();
+    let data = vec![0xABu8; 256];
+    let num_writers = 8;
+    let writes_per_task = 50;
+
+    group.throughput(Throughput::Elements((num_writers * writes_per_task) as u64));
+
+    // Old architecture: single Mutex<WalWriter>, N tasks contending
+    group.bench_function("mutex_walwriter_8tasks", |b| {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config();
+        let writer = rt
+            .block_on(WalWriter::open(dir.path().join("wal"), &config))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(writer));
+
+        b.to_async(&rt).iter(|| {
+            let writer = writer.clone();
+            let data = data.clone();
+            async move {
+                let mut handles = Vec::with_capacity(num_writers);
+                for _ in 0..num_writers {
+                    let w = writer.clone();
+                    let d = data.clone();
+                    handles.push(tokio::spawn(async move {
+                        for _ in 0..writes_per_task {
+                            let mut wal = w.lock().await;
+                            wal.append_event(MessageId::new(), &d).await.unwrap();
+                        }
+                    }));
+                }
+                for h in handles {
+                    h.await.unwrap();
+                }
+            }
+        });
+    });
+
+    // New architecture: ShardedWalWriter with 4 shards
+    for num_shards in [1, 4, 8] {
         group.bench_with_input(
-            BenchmarkId::new("sharded", num_shards),
+            BenchmarkId::new("sharded_8tasks", num_shards),
             &num_shards,
             |b, &shards| {
                 let dir = tempfile::tempdir().unwrap();
-                let config = WalConfig {
-                    segment_size_bytes: 256 * 1024 * 1024,
-                    sync_mode: "none".into(),
-                    shards,
-                };
-                let wal = rt
-                    .block_on(ShardedWalWriter::open(
+                let config = test_config();
+                let wal = Arc::new(
+                    rt.block_on(ShardedWalWriter::open(
                         dir.path().join("wal"),
                         &config,
                         shards,
                     ))
-                    .unwrap();
+                    .unwrap(),
+                );
 
-                let mut counter = 0u64;
                 b.to_async(&rt).iter(|| {
-                    let topic = format!("bench.topic.{}", counter % 100);
-                    counter += 1;
-                    let wal = &wal;
-                    let data = &data;
+                    let wal = wal.clone();
+                    let topics = &topics;
+                    let data = data.clone();
                     async move {
-                        wal.append_event(&topic, MessageId::new(), data)
-                            .await
-                            .unwrap();
+                        let mut handles = Vec::with_capacity(num_writers);
+                        for i in 0..num_writers {
+                            let w = wal.clone();
+                            let d = data.clone();
+                            let t = topics[i * writes_per_task % topics.len()..].to_vec();
+                            handles.push(tokio::spawn(async move {
+                                for j in 0..writes_per_task {
+                                    let topic = &t[j % t.len()];
+                                    w.append_event(topic, MessageId::new(), &d)
+                                        .await
+                                        .unwrap();
+                                }
+                            }));
+                        }
+                        for h in handles {
+                            h.await.unwrap();
+                        }
                     }
                 });
             },
@@ -86,5 +158,5 @@ fn wal_write_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, wal_write_benchmark);
+criterion_group!(benches, sequential_benchmark, concurrent_benchmark);
 criterion_main!(benches);
