@@ -221,7 +221,7 @@ impl WriterState {
 fn writer_thread_main(
     rx: Receiver<ThreadMessage>,
     state: &mut WriterState,
-    flush_interval: Duration,
+    _flush_interval: Duration,
     max_batch: usize,
 ) {
     let mut pending: Vec<PendingWrite> = Vec::with_capacity(max_batch);
@@ -233,7 +233,7 @@ fn writer_thread_main(
             Err(_) => break, // channel closed
         };
 
-        let batch_start = Instant::now();
+        let _batch_start = Instant::now();
 
         match first {
             ThreadMessage::Shutdown => {
