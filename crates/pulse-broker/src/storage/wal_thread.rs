@@ -260,13 +260,11 @@ fn writer_thread_main(
             }
         }
 
-        // 2. Collect more messages until batch is full or deadline expires.
+        // 2. Drain all immediately-available messages (non-blocking).
+        //    Under load this collects a full batch without any wait.
+        //    Under light load we proceed to flush immediately.
         while pending.len() < max_batch {
-            let remaining = flush_interval.saturating_sub(batch_start.elapsed());
-            if remaining.is_zero() {
-                break;
-            }
-            match rx.recv_timeout(remaining) {
+            match rx.try_recv() {
                 Ok(ThreadMessage::Write(req)) => {
                     match state.write_one(&req) {
                         Ok(pos) => {
@@ -281,7 +279,6 @@ fn writer_thread_main(
                     }
                 }
                 Ok(ThreadMessage::Sync(req)) => {
-                    // Flush the current batch, then reply to sync.
                     let flush_result = state.flush_and_sync();
                     for pw in pending.drain(..) {
                         let _ = pw.reply.send(Ok(pw.position));
@@ -295,7 +292,7 @@ fn writer_thread_main(
                     }
                     return;
                 }
-                Err(_) => break, // timeout or disconnected
+                Err(_) => break, // empty or disconnected — flush what we have
             }
         }
 
