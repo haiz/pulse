@@ -218,6 +218,22 @@ impl ConnectionHandler {
                     _ => unreachable!(),
                 };
 
+                // Admission control: reject early if overloaded
+                if !broker.admission.should_accept() {
+                    let err_frame = Frame::err(
+                        frame.msg_id,
+                        ErrPayload {
+                            code: 5030,
+                            message: "server overloaded, retry later".into(),
+                        },
+                    );
+                    framed
+                        .send(err_frame)
+                        .await
+                        .map_err(|e| BrokerError::Connection(e.to_string()))?;
+                    return Ok(());
+                }
+
                 // Send to dispatcher and wait for result
                 let (reply_tx, reply_rx) = oneshot::channel();
                 let msg = IngestMessage {

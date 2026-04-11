@@ -12,6 +12,7 @@ use pulse_protocol::*;
 use pulse_broker::broker::BrokerHandle;
 use pulse_broker::config::BrokerConfig;
 use pulse_broker::delivery::manager::DeliveryManager;
+use pulse_broker::pipeline::admission::AdmissionController;
 use pulse_broker::pipeline::dedup::DedupEngine;
 use pulse_broker::pipeline::dispatcher::Dispatcher;
 use pulse_broker::routing::Router;
@@ -34,11 +35,12 @@ async fn start_broker() -> (std::net::SocketAddr, tempfile::TempDir) {
     let delivery = DeliveryManager::new(&config.delivery, None);
     let router = Arc::new(Router::new());
     let (dispatch_tx, dispatch_rx) = mpsc::channel(1024);
-    Dispatcher::spawn(dedup, wal, dispatch_rx, Some(router.clone()));
+    let admission = Arc::new(AdmissionController::new(50_000));
+    Dispatcher::spawn(dedup, wal, dispatch_rx, Some(router.clone()), Some(admission.clone()));
 
     // Bind to port 0 for random available port
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let broker = BrokerHandle::new(config, dispatch_tx, state_db, delivery, router);
+    let broker = BrokerHandle::new(config, dispatch_tx, state_db, delivery, router, admission);
     let listener = Listener::bind(addr, broker).await.unwrap();
 
     // Get the actual bound address

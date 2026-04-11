@@ -8,6 +8,7 @@ use pulse_broker::broker::BrokerHandle;
 use pulse_broker::config::BrokerConfig;
 use pulse_broker::delivery::dlq::DeadLetterQueue;
 use pulse_broker::delivery::manager::DeliveryManager;
+use pulse_broker::pipeline::admission::AdmissionController;
 use pulse_broker::pipeline::dedup::DedupEngine;
 use pulse_broker::pipeline::dispatcher::Dispatcher;
 use pulse_broker::server::listener::Listener;
@@ -118,6 +119,9 @@ async fn main() -> anyhow::Result<()> {
     let dlq = DeadLetterQueue::new(state_db.db()).ok();
     let delivery = DeliveryManager::new(&config.delivery, dlq);
 
+    // Build admission controller (50ms WAL latency threshold)
+    let admission = Arc::new(AdmissionController::new(50_000));
+
     // Build broker handle (shared state) — router is shared with dispatcher
     let (dispatch_tx, dispatch_rx) = mpsc::channel(1024);
     let broker = BrokerHandle::new(
@@ -126,11 +130,13 @@ async fn main() -> anyhow::Result<()> {
         state_db.clone(),
         delivery,
         router.clone(),
+        admission.clone(),
     );
 
     // Build pipeline — same router instance used by connections and dispatcher
     let dedup = DedupEngine::new(state_db);
-    let _dispatcher_handle = Dispatcher::spawn(dedup, wal, dispatch_rx, Some(router));
+    let _dispatcher_handle =
+        Dispatcher::spawn(dedup, wal, dispatch_rx, Some(router), Some(admission));
 
     // Start metrics server
     if config.metrics.enabled {

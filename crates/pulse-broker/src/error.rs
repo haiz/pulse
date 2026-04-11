@@ -24,4 +24,7 @@ pub enum BrokerError {
 
     #[error("protocol error: {0}")]
     Protocol(String),
+
+    #[error("server overloaded: {0}")]
+    Overloaded(String),
 }

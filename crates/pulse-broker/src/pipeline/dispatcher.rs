@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, oneshot};
 use pulse_protocol::{MessageId, PubPayload};
 
 use crate::error::BrokerError;
+use crate::pipeline::admission::AdmissionController;
 use crate::pipeline::dedup::{DedupEngine, DedupResult};
 use crate::pipeline::ingest::IngestResult;
 use crate::routing::Router;
@@ -36,6 +37,7 @@ impl Dispatcher {
         wal: ShardedWalWriter,
         mut rx: mpsc::Receiver<IngestMessage>,
         router: Option<Arc<Router>>,
+        admission: Option<Arc<AdmissionController>>,
     ) -> tokio::task::JoinHandle<()> {
         let dispatcher = Arc::new(Self::new(dedup, wal));
 
@@ -43,7 +45,12 @@ impl Dispatcher {
             while let Some(msg) = rx.recv().await {
                 let msg_id = msg.msg_id;
                 let pub_payload = msg.pub_payload.clone();
+
+                let start = std::time::Instant::now();
                 let result = dispatcher.ingest(msg_id, &pub_payload).await;
+                if let Some(ac) = &admission {
+                    ac.record_wal_latency(start.elapsed());
+                }
 
                 // Route on successful ingest
                 if matches!(result, IngestResult::Stored { .. }) {
@@ -359,7 +366,7 @@ mod tests {
         let dedup = DedupEngine::new(state_db);
 
         let (tx, rx) = mpsc::channel(64);
-        let handle = Dispatcher::spawn(dedup, wal, rx, None);
+        let handle = Dispatcher::spawn(dedup, wal, rx, None, None);
 
         // Send a message through the channel
         let msg_id = MessageId::new();

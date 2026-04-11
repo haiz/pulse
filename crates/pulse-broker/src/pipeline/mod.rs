@@ -1,3 +1,4 @@
+pub mod admission;
 pub mod batch;
 pub mod bloom;
 pub mod dedup;

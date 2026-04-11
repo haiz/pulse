@@ -8,6 +8,7 @@ use pulse_protocol::Frame;
 
 use crate::config::BrokerConfig;
 use crate::delivery::manager::DeliveryManager;
+use crate::pipeline::admission::AdmissionController;
 use crate::pipeline::dispatcher::IngestMessage;
 use crate::routing::Router;
 use crate::server::session::{Session, SessionId};
@@ -30,6 +31,7 @@ pub struct BrokerHandle {
     pub state_db: Arc<StateDb>,
     pub router: Arc<Router>,
     pub delivery: DeliveryManager,
+    pub admission: Arc<AdmissionController>,
 }
 
 impl BrokerHandle {
@@ -39,6 +41,7 @@ impl BrokerHandle {
         state_db: Arc<StateDb>,
         delivery: DeliveryManager,
         router: Arc<Router>,
+        admission: Arc<AdmissionController>,
     ) -> Arc<Self> {
         Arc::new(Self {
             config: ArcSwap::new(Arc::new(config)),
@@ -47,6 +50,7 @@ impl BrokerHandle {
             state_db,
             router,
             delivery,
+            admission,
         })
     }
 
