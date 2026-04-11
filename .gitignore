@@ -43,6 +43,10 @@ sdks/go/go.sum
 # Claude/Serena (local tools)
 .claude/
 .serena/
+docs/superpowers/
+
+# Lock files in non-root crates
+sdks/python/Cargo.lock
 
 # Secrets (never commit)
 *.pem
