@@ -66,7 +66,7 @@ pub struct WalReplayResult {
 
 // ─── Segment Header ───
 
-fn encode_segment_header(segment_number: u32) -> [u8; 32] {
+pub(crate) fn encode_segment_header(segment_number: u32) -> [u8; 32] {
     let mut buf = [0u8; 32];
     buf[0..4].copy_from_slice(&WAL_MAGIC);
     buf[4] = WAL_VERSION;
@@ -470,7 +470,7 @@ pub async fn replay_wal_sharded(
 
 // ─── Helpers ───
 
-fn segment_path(wal_dir: &Path, segment_number: u32) -> PathBuf {
+pub(crate) fn segment_path(wal_dir: &Path, segment_number: u32) -> PathBuf {
     wal_dir.join(format!("segment-{segment_number:06}.wal"))
 }
 

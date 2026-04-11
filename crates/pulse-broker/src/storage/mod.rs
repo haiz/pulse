@@ -6,3 +6,4 @@ pub mod state_db;
 pub mod wal;
 pub mod wal_engine;
 pub mod wal_record;
+pub mod wal_thread;
