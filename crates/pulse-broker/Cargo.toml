@@ -45,3 +45,7 @@ criterion = { workspace = true, features = ["async_tokio"] }
 [[bench]]
 name = "throughput"
 harness = false
+
+[[bench]]
+name = "wal_bench"
+harness = false
